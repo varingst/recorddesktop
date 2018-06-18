@@ -1,0 +1,249 @@
+#!/usr/bin/env bash
+
+print_help() { cat <<EOS
+Usage:
+${0##/*} [FFOPT] [OPT] [+PRESET] [REGION] FILE
+Record desktop REGION to FILE, using ffmpeg with x11grab
+
+REGION can be specified as:
+  WxH+X+Y       Record Width * Height region, positioned at X, Y
+
+  screen[N]     Record X screenN, where N defaults to 0
+                Gets screen dimensions from xrandr
+                This typically captures the entire desktop
+
+  rect          Select a rectangular region to record
+                Requires xrectsel
+  WxH           Select a rectangular region, but scale
+                selection to WxH
+  W:H           Select a rectangular region, but grow
+                selection to W:H aspect ratio
+
+  win           Select a X11 client window to record
+                Requires xwininfo, xdotool or wmctrl
+
+  Not specifying a region captures the entire desktop
+
+FFOPT are options passed to ffmpeg
+  Single-dash options (-option) are passed to ffmpeg
+
+PRESET is a named set of ffmpeg options, which may be extended
+or overridden in ~/.recorddesktop. Presets are declared as:
+
+[name] [ffmpeg options]+
+
+and then applied on the command line as +name. Multiple presets
+may be applied.
+
+Options:
+
+  --dry-run    Print command and exit only, do not run ffmpeg
+  --presets    List defined presets and exit
+  --help       Display this help text and exit
+EOS
+}
+
+main() {
+  declare -ag ffopts
+  declare -ag preopts
+  presets=""
+
+  while (( $# )); do
+    case "$1" in
+      --dry-run)
+        ffmpeg() {
+          echo ffmpeg "$@"
+        }
+      ;;
+      --help)
+        print_help
+        exit
+      ;;
+      --presets)
+        dump_presets
+        exit
+      ;;
+      --) shift; break;;
+      --*) bail "unrecognized option: '$1'";;
+      -*)
+        ffopts+=( "$1" )
+        if [[ "$2" != -* ]]; then
+          ffopts+=( "$2" )
+          shift
+        fi
+      ;;
+      +*) presets+="$1";;
+      *) break;;
+    esac
+    shift
+  done
+
+  if [[ -n "$2" ]]; then
+    region="$1"
+    shift
+  fi
+
+  [[ -n "$1" ]] || bail "no outfile provided"
+
+  out="$1"
+
+  load_presets "$out"
+
+  case "${region,,}" in
+    *x*+*)
+      read_geometry "$region"
+    ;;
+    rect|*x*|*:*)
+      read_geometry "$(select_region "$region")"
+    ;;
+    win)
+      read_geometry "$(select_window)"
+    ;;
+    ''|screen*)
+      read_geometry "$(screen_region "${region#screen}")"
+    ;;
+  esac
+
+  ensure width height x y
+
+  ffmpeg -video_size "${width}x${height}" \
+         "${preopts[@]}" \
+         "${ffopts[@]}" \
+         -f x11grab \
+         -i "$DISPLAY+$x,$y" \
+         "$out"
+}
+
+load_presets() {
+  # TODO: implement extension-based presets
+  while read -r _ optline; do
+    read -ra opts <<< "$optline"
+    for opt in "${opts[@]}"; do
+      preopts+=( "$opt" )
+    done
+  done < <(awk -v presets="$presets" '
+    { defined[$1]=$0 }
+    END {
+      len = split(presets, set, "+")
+
+      # first element will be empty string, since presets
+      # are passed as +preset1+preset2+preset3
+
+      for (i=2; i<=len; i++) {
+        if (set[i] in defined) {
+          print defined[set[i]]
+        }
+      }
+    }' <(dump_presets)
+  )
+}
+
+dump_presets() { cat <<EOS
+test1 -test1 value1
+test2 -test2 value2
+EOS
+  [[ -s ~/.recorddesktop ]] && cat ~/.recorddesktop
+}
+
+screen_region() {
+  need xrandr to determine screen size
+  xrandr --display "$DISPLAY" --screen "${1:-0}" | \
+    awk 'NR==1 { printf "%dx%d+0+0", int($8), int($10) }'
+}
+
+select_window() {
+  if has xdotool; then
+    xdotool selectwindow getwindowgeometry | awk '
+      $1 == "Position:" { pos=$2 }
+      $1 == "Geometry:" { geo=$2 }
+      END { printf "%s+%s", geo, pos }'
+  elif has xwininfo; then
+    xwininfo | awk '$1 == "-geometry" { print $2 }'
+  elif has wmctrl; then
+    mapfile -t wins < <(wmctrl -lpxG)
+    select win in "${wins[@]}"; do
+      read -r _ _ _ x y width height _ <<< "$win"
+      break
+    done
+    echo "${width}x${height}+${x}+${y}"
+  else
+    bail "need xdotool, xwininfo or wmctrl to select a window"
+  fi
+}
+
+select_region() {
+  need xrectsel to select a region
+  read_geometry "$(xrectsel)"
+
+  case "$1" in
+    *x*) # fit to width x height
+      read_dimensions "$1"
+    ;;
+    *:*) # fit to horizontal : vertical aspect ratio
+      read_dimensions "$(grow_to_ratio "$1" "$width" "$height")"
+    ;;
+  esac
+  echo "${width}x${height}+${x}+${y}"
+}
+
+grow_to_ratio() {
+  IFS=':' read -r x_ratio y_ratio <<< "$1"
+  width="$2"
+  height="$3"
+
+  unit=$(( width / x_ratio ))
+  new_height=$(( unit * y_ratio ))
+
+  if (( new_height > height )); then
+    # expand in y direction
+    height="$new_height"
+  else
+    # expand in x direction
+    unit=$(( height / y_ratio ))
+    width=$(( unit * x_ratio ))
+  fi
+  echo "${width}x${height}"
+}
+
+ensure() {
+  for arg; do
+    if [[ -z "${!arg}" ]]; then
+      bail "could not record, \$${arg} not set"
+    fi
+  done
+}
+
+read_geometry() {
+  IFS=$'x+,-' read -r width height x y <<< "$1"
+}
+
+read_dimensions() {
+  IFS='x' read -r width height <<< "$1"
+}
+
+has() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+need() {
+  has "$1" || bail "need $*"
+}
+
+bail() {
+  printf '%s\n' "$@" >&2
+  exit 1
+}
+
+err() {
+  ecode="$?"
+  cat >&2 <<EOS
+got an unexpected error running:
+$BASH_COMMAND
+on line ${BASH_LINENO[0]}
+exit code: $ecode
+EOS
+  exit "$ecode"
+}
+
+trap err ERR
+main "$@"

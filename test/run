@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+
+readcmd() {
+  SIZE=
+  POS=
+  CMDLINE=()
+  while (( $# )); do
+    case "$1" in
+      -video_size) SIZE="$2";;
+      -i)          POS="${2#*+}";;
+    esac
+    CMDLINE+=( "$1" )
+    shift
+  done
+}
+
+ffmpeg() {
+  echo "$@"
+}
+
+xrectsel() {
+  echo "${XRECTSEL:-320x200+20+20}"
+}
+
+testPlainGeometry() {
+  readcmd $(recorddesktop "320x200+20+20" /dev/null)
+  assertEquals "320x200" "$SIZE"
+  assertEquals "20,20" "$POS"
+}
+
+testRect() {
+  export XRECTSEL="200x100+10+10"
+  readcmd $(recorddesktop rect /dev/null)
+  assertEquals "200x100" "$SIZE"
+  assertEquals "10,10" "$POS"
+
+  # expand to fit dimension
+  readcmd $(recorddesktop 320x200 /dev/null)
+  assertEquals "320x200" "$SIZE"
+  assertEquals "10,10" "$POS"
+
+  # expand height to fit ratio
+  readcmd $(recorddesktop 4:3 /dev/null)
+  assertEquals "200x150" "$SIZE"
+  assertEquals "10,10" "$POS"
+
+  # expand width to fit ratio
+  readcmd $(recorddesktop 5:2 /dev/null)
+  assertEquals "250x100" "$SIZE"
+  assertEquals "10,10" "$POS"
+}
+
+export -f ffmpeg xrectsel
+
+. shunit2
