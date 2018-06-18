@@ -4,15 +4,33 @@ readcmd() {
   SIZE=
   POS=
   CMDLINE=()
+  declare -Ag OPTS
   while (( $# )); do
     case "$1" in
       -video_size) SIZE="$2";;
       -i)          POS="${2#*+}";;
+      -*)          OPTS["$1"]="$2";;
     esac
     CMDLINE+=( "$1" )
     shift
   done
 }
+
+mkpresets() {
+  export PRESETS=$(mktemp)
+  cat >"$PRESETS" <<EOS
+
+preset1 -opt1 value1 -opt2 value2 -opt3 value3
+preset2 -opt3 value4
+
+EOS
+}
+
+rmpresets() {
+  rm -f "${PRESETS?Ooopps}"
+}
+
+# shims
 
 ffmpeg() {
   echo "$@"
@@ -20,6 +38,44 @@ ffmpeg() {
 
 xrectsel() {
   echo "${XRECTSEL:-320x200+20+20}"
+}
+
+wmctrl() { cat <<EOS
+  ID DESKTOP PID X Y W H CLASS HOST WIN
+  ID DESKTOP PID $X1 $Y1 $W1 $H1 CLASS HOST WIN
+  ID DESKTOP PID X Y W H CLASS HOST WIN
+EOS
+}
+
+xwininfo() { cat <<EOS
+  bla bla bla
+  bla bla bla
+  -geometry ${W2}x${H2}+${X2}+${Y2}
+
+EOS
+}
+
+xdotool() { cat <<EOS
+Window 28934678
+ Position: ${X3},${Y3}
+ Geometry: ${W3}x${H3}
+EOS
+}
+
+xrandr() { cat <<EOS
+Screen $4: minimum 320 x 200, current $SW x $SH
+bla balbalb albal
+bla balbalb albal
+EOS
+}
+
+command() {
+  case "$2" in
+    xdotool)  [[ -n "$XDOTOOL" ]]  || return 1;;
+    xwininfo) [[ -n "$XWININFO" ]] || return 1;;
+    wmctrl)   [[ -n "$WMCTRL" ]]   || return 1;;
+  esac
+  builtin command "$@"
 }
 
 testPlainGeometry() {
@@ -50,6 +106,61 @@ testRect() {
   assertEquals "10,10" "$POS"
 }
 
-export -f ffmpeg xrectsel
+testWin() {
+  readcmd $(recorddesktop win /dev/null 2>/dev/null)
+  assertEquals "0" "${#CMDLINE[@]}"
+
+  export -f wmctrl
+  export WMCTRL=1 X1=20 Y1=10 W1=320 H1=200
+
+  readcmd $(echo 2 | recorddesktop win /dev/null 2>/dev/null)
+  assertEquals "320x200" "$SIZE"
+  assertEquals "20,10" "$POS"
+
+  export -f xwininfo
+  export XWININFO=1 X2=40 Y2=20 W2=200 H2=100
+  readcmd $(recorddesktop win /dev/null)
+  assertEquals "200x100" "$SIZE"
+  assertEquals "40,20" "$POS"
+
+  export -f xdotool
+  export XDOTOOL=1 X3=20 Y3=10 W3=300 H3=150
+  readcmd $(recorddesktop win /dev/null)
+  assertEquals "300x150" "$SIZE"
+  assertEquals "20,10" "$POS"
+}
+
+testScreen() {
+  export SW=1920 SH=1080
+  readcmd $(recorddesktop /dev/null)
+  assertEquals "1920x1080" "$SIZE"
+  assertEquals "0,0" "$POS"
+
+  export SW=320 SH=200
+  readcmd $(recorddesktop screen /dev/null)
+  assertEquals "320x200" "$SIZE"
+  assertEquals "0,0" "$POS"
+
+  export SW=640 SH=480
+  readcmd $(recorddesktop screen5 /dev/null)
+  assertEquals "640x480" "$SIZE"
+  assertEquals "0,0" "$POS"
+}
+
+testPresets() {
+  mkpresets
+
+  readcmd $(recorddesktop +preset1 /dev/null)
+  assertEquals "value1" "${OPTS[-opt1]}"
+  assertEquals "value2" "${OPTS[-opt2]}"
+
+  readcmd $(recorddesktop +preset1 +preset2 /dev/null)
+  assertEquals "value1" "${OPTS[-opt1]}"
+  assertEquals "value4" "${OPTS[-opt3]}"
+
+  rmpresets
+}
+
+export -f ffmpeg xrectsel command xrandr
 
 . shunit2

@@ -142,7 +142,7 @@ dump_presets() { cat <<EOS
 test1 -test1 value1
 test2 -test2 value2
 EOS
-  [[ -s ~/.recorddesktop ]] && cat ~/.recorddesktop
+  [[ -s "${PRESETS:=~/.recorddesktop}" ]] && cat "$PRESETS"
 }
 
 screen_region() {
