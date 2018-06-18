@@ -1,0 +1,4 @@
+
+* Add some actual presets
+* Add some examples in help
+* Write the README.md
