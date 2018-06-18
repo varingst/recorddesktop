@@ -2,7 +2,7 @@
 
 print_help() { cat <<EOS
 Usage:
-${0##/*} [FFOPT] [OPT] [+PRESET] [REGION] FILE
+${0##*/} [FFOPT] [OPT] [+PRESET] [REGION] FILE
 Record desktop REGION to FILE, using ffmpeg with x11grab
 
 REGION can be specified as:
