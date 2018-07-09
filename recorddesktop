@@ -106,16 +106,15 @@ main() {
 
   ensure width height x y
 
-  ffmpeg -video_size "${width}x${height}" \
+  ffmpeg -f x11grab \
+         -i "$DISPLAY+$x,$y" \
+         -video_size "${width}x${height}" \
          "${preopts[@]}" \
          "${ffopts[@]}" \
-         -f x11grab \
-         -i "$DISPLAY+$x,$y" \
          "$out"
 }
 
 load_presets() {
-  # TODO: implement extension-based presets
   while read -r _ optline; do
     read -ra opts <<< "$optline"
     for opt in "${opts[@]}"; do
@@ -139,8 +138,8 @@ load_presets() {
 }
 
 dump_presets() { cat <<EOS
-test1 -test1 value1
-test2 -test2 value2
+webm -vcodec libvpx -qmin 0 -qmax 50 -crf 10 -b:v 1M
+webclip -vcodec libvpx -qmin 0 -qmax 50 -crf 10 -b:v 512K -vf scale=320:-1 -t 00:10
 EOS
   [[ -s "${PRESETS:=~/.recorddesktop}" ]] && cat "$PRESETS"
 }
